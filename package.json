@@ -1,6 +1,6 @@
 {
   "name": "dsh-alist",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "AList v3 control for DeepSeek Harness: browse, search, upload and administrate an AList instance (files, tasks, storages, users, roles, meta, settings, index, shares) through conversation.",
   "type": "module",
   "main": "index.js",
