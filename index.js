@@ -70,31 +70,56 @@ Credentials (password or long-lived token) are loaded from the local credential 
 
 Before changing anything, call the matching list/get tool first so you only touch what the user asked about. Prefer alist_fs_search over walking a deep tree, and keep per_page small (<=200) on big directories.`;
 
+// ---------------------------------------------------------------- volatile 解包
+
+// 新宿主（0.1.7+）：Config 里标了 .volatile() 的字段，schemastery 会把值包成
+// Volatile 引用（cosmokit.volatile.write + get()）。消费配置前必须解包，
+// 否则拿到的是引用对象而不是实际值。写法对齐 dsh-pve 0.2.0。
+const VOLATILE_WRITE = Symbol.for("cosmokit.volatile.write");
+
+export function unwrapVolatile(value) {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    VOLATILE_WRITE in value &&
+    typeof value.get === "function"
+  ) {
+    return unwrapVolatile(value.get());
+  }
+  if (Array.isArray(value)) return value.map(unwrapVolatile);
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value)) out[key] = unwrapVolatile(value[key]);
+    return out;
+  }
+  return value;
+}
+
 export const Config = Schema.object({
   baseUrl: Schema.string()
     .default("")
     .description("AList base URL, e.g. http://127.0.0.1:5244. When empty, resolve from settings.")
-    .meta({ volatile: true }),
+    .volatile(),
   username: Schema.string()
     .default("")
     .description('AList username for password auth, e.g. admin. Only used when authMode is "password".')
-    .meta({ volatile: true }),
+    .volatile(),
   authMode: Schema.string()
     .default("password")
     .description('Authentication mode: "password" (login to get a JWT) or "token" (long-lived admin token).')
-    .meta({ volatile: true }),
+    .volatile(),
   clientId: Schema.string()
     .default("dsh-alist")
     .description("Client-Id sent on login and subsequent requests, keeping a stable device session.")
-    .meta({ volatile: true }),
+    .volatile(),
   allowInsecureTls: Schema.boolean()
     .default(false)
     .description("Skip TLS certificate verification. Enable for self-signed internal hosts.")
-    .meta({ volatile: true }),
+    .volatile(),
   maxUploadBytes: Schema.number()
     .default(DEFAULT_MAX_UPLOAD_BYTES)
     .description("Maximum size of a single upload, in bytes (default 1073741824 = 1 GiB).")
-    .meta({ volatile: true }),
+    .volatile(),
   // password / token 刻意不声明 volatile：不进设置表单，凭据走凭证库（只写不读）。
   // 这两个 fallback 字段只从入口配置（patch.yml）读；宿主 update 只写 volatile 字段，不会碰它们。
   password: Schema.string()
@@ -183,12 +208,9 @@ export function apply(ctx, config = {}) {
       throw new Error(`Invalid ${label} credential reference: ${JSON.stringify(ref)}`);
   }
 
-  // 配置来源：cordis entry 的 config（apply 第二参）。新版 dsh-settings 已移除
-  // settings.register()/namespace 机制 —— 设置页改值会写入 profile patch 并重载插件，
-  // apply 会以新 config 重新执行，因此 activeConfig 直接读 entryConfig 即可。
-  // 注意：volatile 字段可能被宿主热应用而不重载 fiber（reactive config 代理），
-  // 所以每次取值都重新展开，不做快照拷贝。
-  let activeConfig = () => ({ ...DEFAULTS, ...config });
+  // 配置来源：cordis entry 的 config（apply 第二参）。volatile 字段被宿主写入后
+  // 值是 Volatile 引用（且可能热应用而不重载 fiber），所以每次取值都解包 + 展开。
+  let activeConfig = () => ({ ...DEFAULTS, ...unwrapVolatile(config) });
   // 自带设置卡片（client.js，slot key "alist"）：关闭基于 Config schema 的自动表单，避免两份重复。
   // configure() 只在新版 settings 服务上存在，缺失时静默跳过（自动表单照常生成，不影响功能）。
   ctx.inject(["settings"], (sctx) => {
