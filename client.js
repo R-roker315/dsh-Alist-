@@ -15,7 +15,11 @@ window.__ModuleLoader__.load({
     const TOKEN_REF = "ALIST_TOKEN";
     const SETTINGS_NS = "alist";
     const MASK = "*".repeat(28);
-    const inject = ["slots", "remote", "remote.credentials", "remote.settings"];
+    // 只 inject slots（对齐 dsh-pve 0.2.0）：cordis 4.0.2 中任一 inject 项缺席都会让
+    // 整个 client 插件永久停在 INACTIVE，设置卡片随之消失。remote.settings /
+    // remote.credentials 改为调用时 ctx.get 按需解析，缺席时卡片给出明确报错。
+    const inject = ["slots"];
+    const HOST_UNSUPPORTED = "当前 DSH 版本未暴露 remote.settings / remote.credentials，请升级 DSH。";
 
     const STRINGS = {
       zh: {
@@ -355,18 +359,34 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
-      const mustOk = (res) => {
-        if (!res || res.ok === false) throw (res && res.error) ?? new Error("remote call failed");
-        return res.value;
+      // 运行时按需解析 remote 门面（对齐 dsh-pve 0.2.0 的兼容模式）。
+      const remoteNamespace = (ns) =>
+        typeof ctx.get === "function" ? ctx.get(`remote.${ns}`) : undefined;
+      const requireNamespace = (ns) => {
+        const api = remoteNamespace(ns);
+        if (!api) throw new Error(HOST_UNSUPPORTED);
+        return api;
+      };
+      const mustOk = (res, what) => {
+        if (res && typeof res === "object" && res.ok === true) return res.value;
+        const message =
+          (res && typeof res === "object" && res.error && res.error.message) || `${what} failed`;
+        throw new Error(message);
       };
       const face = {
         describe: async () => {
-          const [credRes, setRes] = await Promise.all([
-            ctx.remote.credentials.describe([PASSWORD_REF, TOKEN_REF]),
-            ctx.remote.settings.describe(),
-          ]);
-          const creds = credRes?.ok ? (credRes.value ?? {}) : {};
-          const namespaces = setRes?.ok ? (setRes.value?.namespaces ?? []) : [];
+          const settings = remoteNamespace("settings");
+          const setRes =
+            settings && typeof settings.describe === "function"
+              ? await settings.describe()
+              : null;
+          const namespaces = setRes && setRes.ok === true ? (setRes.value?.namespaces ?? []) : [];
+          let creds = {};
+          const credentials = remoteNamespace("credentials");
+          if (credentials && typeof credentials.describe === "function") {
+            const credRes = await credentials.describe([PASSWORD_REF, TOKEN_REF]);
+            if (credRes && credRes.ok === true) creds = credRes.value ?? {};
+          }
           const ns = namespaces.find((n) => n?.ns === SETTINGS_NS);
           const value = ns?.value ?? {};
           const num = (v, fallback) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
@@ -381,24 +401,38 @@ window.__ModuleLoader__.load({
             maxUploadBytes: num(value.maxUploadBytes, 1073741824),
           };
         },
-        setPassword: (v) => ctx.remote.credentials.set(PASSWORD_REF, v).then(mustOk),
-        setToken: (v) => ctx.remote.credentials.set(TOKEN_REF, v).then(mustOk),
-        unsetPassword: () => ctx.remote.credentials.unset(PASSWORD_REF).then(mustOk),
-        unsetToken: () => ctx.remote.credentials.unset(TOKEN_REF).then(mustOk),
-        setBaseUrl: (v) => ctx.remote.settings.update(SETTINGS_NS, { baseUrl: v }, undefined).then(mustOk),
-        setUsername: (v) => ctx.remote.settings.update(SETTINGS_NS, { username: v }, undefined).then(mustOk),
-        setAuthMode: (v) => ctx.remote.settings.update(SETTINGS_NS, { authMode: v }, undefined).then(mustOk),
-        setClientId: (v) => ctx.remote.settings.update(SETTINGS_NS, { clientId: v }, undefined).then(mustOk),
+        setPassword: (v) =>
+          requireNamespace("credentials").set(PASSWORD_REF, v).then((r) => mustOk(r, "credentials.set")),
+        setToken: (v) =>
+          requireNamespace("credentials").set(TOKEN_REF, v).then((r) => mustOk(r, "credentials.set")),
+        unsetPassword: () =>
+          requireNamespace("credentials").unset(PASSWORD_REF).then((r) => mustOk(r, "credentials.unset")),
+        unsetToken: () =>
+          requireNamespace("credentials").unset(TOKEN_REF).then((r) => mustOk(r, "credentials.unset")),
+        setBaseUrl: (v) =>
+          requireNamespace("settings").update(SETTINGS_NS, { baseUrl: v }, undefined).then((r) => mustOk(r, "settings.update")),
+        setUsername: (v) =>
+          requireNamespace("settings").update(SETTINGS_NS, { username: v }, undefined).then((r) => mustOk(r, "settings.update")),
+        setAuthMode: (v) =>
+          requireNamespace("settings").update(SETTINGS_NS, { authMode: v }, undefined).then((r) => mustOk(r, "settings.update")),
+        setClientId: (v) =>
+          requireNamespace("settings").update(SETTINGS_NS, { clientId: v }, undefined).then((r) => mustOk(r, "settings.update")),
         setAllowInsecureTls: (v) =>
-          ctx.remote.settings.update(SETTINGS_NS, { allowInsecureTls: v }, undefined).then(mustOk),
+          requireNamespace("settings").update(SETTINGS_NS, { allowInsecureTls: v }, undefined).then((r) => mustOk(r, "settings.update")),
         setMaxUploadBytes: (v) =>
-          ctx.remote.settings.update(SETTINGS_NS, { maxUploadBytes: v }, undefined).then(mustOk),
+          requireNamespace("settings").update(SETTINGS_NS, { maxUploadBytes: v }, undefined).then((r) => mustOk(r, "settings.update")),
         localePreference: async () => {
-          const res = await ctx.remote.settings.describe();
-          if (!res?.ok) return "";
-          const locale = (res.value?.namespaces ?? []).find((n) => n?.ns === "locale");
-          const pref = locale?.value?.preference;
-          return typeof pref === "string" ? pref : "";
+          const settings = remoteNamespace("settings");
+          if (!settings || typeof settings.describe !== "function") return "";
+          try {
+            const res = await settings.describe();
+            if (!res || res.ok !== true) return "";
+            const locale = (res.value?.namespaces ?? []).find((n) => n?.ns === "locale");
+            const pref = locale?.value?.preference;
+            return typeof pref === "string" ? pref : "";
+          } catch {
+            return "";
+          }
         },
       };
 
