@@ -436,16 +436,60 @@ window.__ModuleLoader__.load({
         },
       };
 
-      ctx.slots.inject("settings.plugin.item", () =>
-        ctx.slots.register(
+      // 对齐 dsh-pve 0.2.0 的 slot 协议：新版宿主的设置页 slot 带 kind/scope，
+      // 注册前用 ctx.slots.spec() 探测；老宿主无 spec() 时回退旧式注册。
+      function registerSettingsEntry(ctx2, face2) {
+        const label = "AList 文件管理";
+        const candidates = [
+          {
+            name: "settings.section",
+            kind: "list",
+            scope: "root",
+            options: { name: "settings.section", id: "alist", order: 19, label },
+            component: () => (0, react.createElement)(AlistCard, { alistCard: face2 }),
+          },
+          {
+            name: "settings.plugins.tab",
+            kind: "list",
+            scope: "root",
+            options: { name: "settings.plugins.tab", id: "alist", order: 103, label },
+            component: () => (0, react.createElement)(AlistCard, { alistCard: face2 }),
+          },
           {
             name: "settings.plugin.item",
-            key: "alist",
-            inject: () => ({ alistCard: face }),
+            kind: "keyed",
+            options: { name: "settings.plugin.item", key: "alist", inject: () => ({ alistCard: face2 }) },
+            component: AlistCard,
           },
-          AlistCard,
-        ),
-      );
+        ];
+        if (typeof ctx2.slots.spec !== "function") {
+          for (const candidate of candidates.slice(1)) {
+            ctx2.slots.inject(candidate.name, () => ctx2.slots.register(candidate.options, candidate.component));
+          }
+          return;
+        }
+        ctx2.effect(() => {
+          const disposers = [];
+          for (const candidate of candidates) {
+            try {
+              disposers.push(
+                ctx2.slots.inject(candidate.name, () => {
+                  const spec = ctx2.slots.spec(candidate.name);
+                  if (spec?.kind !== candidate.kind || (candidate.scope && spec.scope !== candidate.scope)) return;
+                  return ctx2.slots.register(candidate.options, candidate.component);
+                }),
+              );
+            } catch (error) {
+              if (error?.code !== "INACTIVE_EFFECT") throw error;
+            }
+          }
+          return () => {
+            for (const dispose of disposers.reverse()) dispose?.();
+          };
+        });
+      }
+
+      registerSettingsEntry(ctx, face);
     }
 
     exports.apply = apply;
