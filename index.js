@@ -73,22 +73,30 @@ Before changing anything, call the matching list/get tool first so you only touc
 export const Config = Schema.object({
   baseUrl: Schema.string()
     .default("")
-    .description("AList base URL, e.g. http://127.0.0.1:5244. When empty, resolve from settings."),
+    .description("AList base URL, e.g. http://127.0.0.1:5244. When empty, resolve from settings.")
+    .meta({ volatile: true }),
   username: Schema.string()
     .default("")
-    .description('AList username for password auth, e.g. admin. Only used when authMode is "password".'),
+    .description('AList username for password auth, e.g. admin. Only used when authMode is "password".')
+    .meta({ volatile: true }),
   authMode: Schema.string()
     .default("password")
-    .description('Authentication mode: "password" (login to get a JWT) or "token" (long-lived admin token).'),
+    .description('Authentication mode: "password" (login to get a JWT) or "token" (long-lived admin token).')
+    .meta({ volatile: true }),
   clientId: Schema.string()
     .default("dsh-alist")
-    .description("Client-Id sent on login and subsequent requests, keeping a stable device session."),
+    .description("Client-Id sent on login and subsequent requests, keeping a stable device session.")
+    .meta({ volatile: true }),
   allowInsecureTls: Schema.boolean()
     .default(false)
-    .description("Skip TLS certificate verification. Enable for self-signed internal hosts."),
+    .description("Skip TLS certificate verification. Enable for self-signed internal hosts.")
+    .meta({ volatile: true }),
   maxUploadBytes: Schema.number()
     .default(DEFAULT_MAX_UPLOAD_BYTES)
-    .description("Maximum size of a single upload, in bytes (default 1073741824 = 1 GiB)."),
+    .description("Maximum size of a single upload, in bytes (default 1073741824 = 1 GiB).")
+    .meta({ volatile: true }),
+  // password / token 刻意不声明 volatile：不进设置表单，凭据走凭证库（只写不读）。
+  // 这两个 fallback 字段只从入口配置（patch.yml）读；宿主 update 只写 volatile 字段，不会碰它们。
   password: Schema.string()
     .default("")
     .description(
@@ -158,14 +166,13 @@ function textOut(value) {
 // ---------------------------------------------------------------- 执行引擎
 
 export function apply(ctx, config = {}) {
-  const entryConfig = {
+  const DEFAULTS = {
     baseUrl: "",
     username: "",
     authMode: "password",
     clientId: "dsh-alist",
     allowInsecureTls: false,
     maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES,
-    ...config,
   };
 
   for (const [ref, label] of [
@@ -179,7 +186,9 @@ export function apply(ctx, config = {}) {
   // 配置来源：cordis entry 的 config（apply 第二参）。新版 dsh-settings 已移除
   // settings.register()/namespace 机制 —— 设置页改值会写入 profile patch 并重载插件，
   // apply 会以新 config 重新执行，因此 activeConfig 直接读 entryConfig 即可。
-  let activeConfig = () => entryConfig;
+  // 注意：volatile 字段可能被宿主热应用而不重载 fiber（reactive config 代理），
+  // 所以每次取值都重新展开，不做快照拷贝。
+  let activeConfig = () => ({ ...DEFAULTS, ...config });
   // 自带设置卡片（client.js，slot key "alist"）：关闭基于 Config schema 的自动表单，避免两份重复。
   // configure() 只在新版 settings 服务上存在，缺失时静默跳过（自动表单照常生成，不影响功能）。
   ctx.inject(["settings"], (sctx) => {
