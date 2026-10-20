@@ -291,6 +291,10 @@ export function apply(ctx, config = {}) {
       });
       const parsed = safeJson(res.text);
       const data = parsed?.data ?? {};
+      // 只缓存"成功探测"的判定：code 200 且 role 字段存在。
+      // 瞬时失败（网络抖动 / AList 5xx / 非 JSON 响应）直接放行，让 AList 自己鉴权，
+      // 避免把否定结果缓存 60 秒造成"间歇性 not an admin"（重试又好的假象）。
+      if (parsed?.code !== 200 || data.role === undefined) return true;
       // AList 服务端 admin 判定：user.Role == 2（admin）或 user.ID == 1（内置管理员）。
       // 注意：/api/me 的 role 是标量数字（不是数组），早期版本可能没有 role_names；
       // 曾经用 Array.isArray(role) 过滤导致标量被丢掉、isAdmin 恒为 false，
