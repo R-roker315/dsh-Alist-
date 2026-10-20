@@ -361,6 +361,16 @@ export function apply(ctx, config = {}) {
 
       const parsed = safeJson(res.text);
       if (res.status >= 200 && res.status < 300) {
+        // 老版本 AList（如 v3.1.0）遇到不存在的端点会回落到前端 HTML 页面，
+        // 之前这里把解析失败当成"空结果"渲染成 OK (no content)，让人误以为
+        // "搜不到 / 索引没建"。这里显式报错，指出该端点在此版本不存在。
+        if (parsed === null && String(res.text ?? "").trimStart().startsWith("<")) {
+          throw new Error(
+            `AList returned HTML instead of JSON for ${method} ${path}. ` +
+              `This endpoint does not exist on this AList version ` +
+              `(search and index APIs require AList >= v3.2.0; check the version with alist_public_settings).`,
+          );
+        }
         if (parsed && Object.hasOwn(parsed, "code") && parsed.code !== 200)
           throw new Error(`AList API error ${parsed.code} (${method} ${path}): ${parsed.message ?? "unknown"}`);
         return parsed && Object.hasOwn(parsed, "data") ? parsed.data : parsed ?? null;
@@ -406,9 +416,18 @@ export function apply(ctx, config = {}) {
             `${def.name} requires an AList administrator token; the configured account is not an admin (AList would answer 403).`,
           );
         // GET 请求不带 body（参数已全部进 query），避免给 AList 发一个多余的 "{}"。
+        let outBody = def.method === "GET" ? undefined : body;
+        if (def.name === "alist_admin_setting_save" && outBody && !Array.isArray(outBody)) {
+          // AList v3 的 /api/admin/setting/save 接受 []SettingItem 数组，
+          // 直接发对象会 400（"decode slice: expect [ or n, but found {"）。
+          outBody = Object.entries(outBody).map(([key, value]) => ({
+            key,
+            value: typeof value === "string" ? value : String(value),
+          }));
+        }
         const data = await api(def.method, path, {
           query,
-          body: def.method === "GET" ? undefined : body,
+          body: outBody,
           parentSignal: exec.signal,
         });
         return formatResult(data, def);
