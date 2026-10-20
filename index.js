@@ -290,9 +290,17 @@ export function apply(ctx, config = {}) {
         rejectUnauthorized: !cfg.allowInsecureTls,
       });
       const parsed = safeJson(res.text);
-      const roles = Array.isArray(parsed?.data?.role) ? parsed.data.role : [];
-      const names = Array.isArray(parsed?.data?.role_names) ? parsed.data.role_names : [];
-      meCache = { at: Date.now(), isAdmin: roles.includes(2) || names.includes("admin") };
+      const data = parsed?.data ?? {};
+      // AList 服务端 admin 判定：user.Role == 2（admin）或 user.ID == 1（内置管理员）。
+      // 注意：/api/me 的 role 是标量数字（不是数组），早期版本可能没有 role_names；
+      // 曾经用 Array.isArray(role) 过滤导致标量被丢掉、isAdmin 恒为 false，
+      // 把所有 admin 工具误拦在插件前置检查里（假 403）。
+      const roles = Array.isArray(data.role) ? data.role : [data.role];
+      const names = Array.isArray(data.role_names) ? data.role_names : [];
+      meCache = {
+        at: Date.now(),
+        isAdmin: roles.includes(2) || roles.includes("2") || names.includes("admin") || data.id === 1,
+      };
     } catch {
       // 探测失败不阻塞：由 AList 自己返回 403。
       return true;
