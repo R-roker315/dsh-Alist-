@@ -393,6 +393,13 @@ export function apply(ctx, config = {}) {
       },
       timeoutMs: TOOL_TIMEOUT_MS,
       async execute(args, exec) {
+        // 单键设置读取（/api/admin/setting/get）返回的是裸值，没有键名上下文，
+        // 递归脱敏会失效 —— 按请求的 key 提前拦截，敏感设置项一律不回显明文。
+        if (def.name === "alist_admin_setting_get") {
+          const asked = String(args?.key ?? "").trim();
+          if (asked && SENSITIVE_KEY.test(asked))
+            return `[REDACTED] 设置项 "${asked}" 属于敏感配置，插件不返回明文。`;
+        }
         const { path, query, body } = prepare(def, args);
         if (def.admin && !(await isAdmin()))
           throw new Error(

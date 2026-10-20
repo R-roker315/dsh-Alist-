@@ -26,8 +26,14 @@ export const TASK_ACTIONS = [
   "retry_some",
 ];
 
+// 敏感键名匹配。覆盖老版 AList（v3.1.x）的 guest_pass / webdav_pass 等短名，
+// 以及 jwt / sign / access_key 一类。注意用子串匹配：AList 键名里含 pass/token/secret
+// 的基本都是凭据，宁可多脱敏也不漏。
 export const SENSITIVE_KEY =
-  /(password|secret|token|passwd|privkey|private_key|private-key|ssh-keys|keyfile|otp_code)/i;
+  /(password|passwd|pass|pwd|secret|token|jwt|sign|credential|privkey|private_key|private-key|ssh-keys|keyfile|otp_code|access_key|api_key)/i;
+
+// 形如 JWT 的值（eyJ...）——即使键名不认识也要脱敏。
+const JWT_LIKE = /^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?$/;
 
 // ---------------------------------------------------------------- helpers
 
@@ -57,6 +63,8 @@ export function apiUrl(baseUrl, path) {
 // 递归脱敏：命中敏感键的值替换为 [REDACTED]。
 export function sanitize(value, key) {
   if (typeof key === "string" && SENSITIVE_KEY.test(key)) return "[REDACTED]";
+  // 裸字符串没有键名上下文时，按值的形态兜底（JWT 之类的密钥）。
+  if (typeof value === "string" && JWT_LIKE.test(value)) return "[REDACTED]";
   if (Array.isArray(value)) return value.map((item) => sanitize(item));
   if (value && typeof value === "object") {
     const out = {};
